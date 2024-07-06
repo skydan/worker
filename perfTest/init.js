@@ -4,6 +4,7 @@ const pgPool = new Pool({ connectionString: process.env.PERF_DATABASE_URL });
 
 const jobCount = parseInt(process.argv[2], 10) || 1;
 const taskIdentifier = process.argv[3] || "log_if_999";
+const queueCount = parseInt(process.argv[4], 10) || 0;
 
 if (!taskIdentifier.match(/^[a-zA-Z0-9_]+$/)) {
   // Validate so we can do raw SQL
@@ -36,12 +37,11 @@ $$ language plpgsql;`,
   } else {
     const jobs = [];
     for (let i = 0; i < jobCount; i++) {
-      jobs.push(
-        `("${taskIdentifier.replace(
-          /["\\]/g,
-          "\\$&",
-        )}","{\\"id\\":${i}}",,,,,,)`,
-      );
+      if (queueCount > 0) {
+        jobs.push(`("${taskIdentifier}","{\\"id\\":${i}}","queue_${i % queueCount}",,,,,)`);
+      } else {
+        jobs.push(`("${taskIdentifier}","{\\"id\\":${i}}",,,,,,)`);
+      }
     }
     const jobsString = `{"${jobs
       .map((j) => j.replace(/["\\]/g, "\\$&"))
@@ -52,6 +52,12 @@ $$ language plpgsql;`,
       [jobsString],
     );
     console.timeEnd("Adding jobs");
+
+    let res = await pgPool.query("select count(*) from graphile_worker._private_jobs;");
+    console.log(`Scheduled ${res.rows[0].count} jobs`);
+
+    res = await pgPool.query("select count(*) from graphile_worker._private_job_queues;");
+    console.log(`Scheduled ${res.rows[0].count} queues`);
   }
 
   pgPool.end();
